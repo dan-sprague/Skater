@@ -1,5 +1,4 @@
 ## LEAPFROG INTEGRATOR
-using ForwardDiff
 include("transformed_densities.jl")
 
 

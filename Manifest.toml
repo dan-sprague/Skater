@@ -2,7 +2,7 @@
 
 julia_version = "1.12.5"
 manifest_format = "2.0"
-project_hash = "359ea790d8329c904847e5740aa82c6c44d2a8b7"
+project_hash = "bae4be212688ea301e4050a9192c9eaea8146692"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -342,7 +342,7 @@ uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 version = "1.11.0"
 
 [[deps.Skater]]
-deps = ["ForwardDiff", "LinearAlgebra", "PositiveFactorizations", "SpecialFunctions"]
+deps = ["Enzyme", "LinearAlgebra", "PositiveFactorizations", "SpecialFunctions"]
 path = "."
 uuid = "d9f16b3c-1d8e-11eb-0a9c-5b1e7cfae1b2"
 version = "0.1.0"
