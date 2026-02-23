@@ -40,5 +40,41 @@ function (model::TransformedLogDensity)(q_unconstrained::AbstractVector{T}) wher
 end
 
 function ∇logp!(model::TransformedLogDensity, q_unconstrained)
-    ForwardDiff.gradient!(model.buffer, model, q_unconstrained)
+    fill!(model.buffer, 0.0)
+
+    lp = try 
+        model(q_unconstrained)
+    catch
+        return -Inf,false
+    end
+
+    if !isfinite(lp)
+        fill!(model.buffer, 0.0)
+        return -Inf,false
+    end
+
+    ok = try
+        Enzyme.autodiff(
+            Enzyme.set_runtime_activity(Enzyme.set_strong_zero(Enzyme.Reverse)),
+            Enzyme.Const(model),   # Wrap the functor here to mark it as constant
+            Enzyme.Active,         # The return value (the log-density) is what we differentiate
+            Enzyme.Duplicated(q_unconstrained, model.buffer) # The ONLY argument to your model
+        )
+        true
+    catch e
+        @error "Enzyme autodiff failed" exception = e
+        false
+    end
+
+    if !ok
+        fill!(model.buffer, 0.0)
+        return -Inf,false
+    end
+
+    if any(isnan,model.buffer) || any(!isfinite, model.buffer)
+        fill!(model.buffer, 0.0)
+        return -Inf,false
+    end
+
+    return lp, true
 end

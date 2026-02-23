@@ -4,7 +4,7 @@ using SpecialFunctions: loggamma, logbeta
 using PositiveFactorizations: cholesky
 using LinearAlgebra: dot,diag
 using ForwardDiff
-
+using Enzyme
 
 include("lpdfs.jl")
 include("welford.jl")
