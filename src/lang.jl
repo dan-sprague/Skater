@@ -2,6 +2,62 @@
 include("bijections.jl")
 import Base.@kwdef
 
+"""Replace `var` with `replacement` throughout an expression."""
+function _subst_var(ex, var::Symbol, replacement)
+    ex isa Symbol && ex == var && return replacement
+    ex isa Expr || return ex
+    return Expr(ex.head, [_subst_var(a, var, replacement) for a in ex.args]...)
+end
+
+"""
+Inline `log_mix(weights) do j; body; end` into a closure-free log-sum-exp loop.
+Eliminates the inner closure that causes Enzyme activity analysis issues.
+"""
+function _inline_log_mix(ex)
+    ex isa Expr || return ex
+    # Recurse first
+    ex = Expr(ex.head, [_inline_log_mix(a) for a in ex.args]...)
+
+    # Detect: log_mix(weights) do j; body; end
+    # AST: Expr(:do, Expr(:call, :log_mix, weights), Expr(:->, params, body))
+    ex.head == :do && length(ex.args) == 2 || return ex
+    call = ex.args[1]
+    lambda = ex.args[2]
+    call isa Expr && call.head == :call && call.args[1] == :log_mix || return ex
+    lambda isa Expr && lambda.head == :-> || return ex
+
+    weights = call.args[2]
+    params = lambda.args[1]
+    body = lambda.args[2]
+
+    j = if params isa Symbol
+        params
+    elseif params isa Expr && params.head == :tuple && length(params.args) == 1
+        params.args[1]
+    else
+        return ex  # unknown form, leave as-is
+    end
+
+    acc = gensym(:lse_acc)
+    lp  = gensym(:lse_lp)
+    jj  = gensym(:lse_j)
+    body_1  = _subst_var(body, j, 1)
+    body_jj = _subst_var(body, j, jj)
+
+    return quote
+        $acc = log($weights[1]) + $body_1
+        for $jj in 2:length($weights)
+            $lp = log($weights[$jj]) + $body_jj
+            if $lp > $acc
+                $acc = $lp + log1p(exp($acc - $lp))
+            else
+                $acc = $acc + log1p(exp($lp - $acc))
+            end
+        end
+        $acc
+    end
+end
+
 """Rewrite bare data-name symbols in an expression to `data.name`."""
 function _rewrite_data_refs(ex, data_names::Set{Symbol}, param_names::Set{Symbol})
     ex isa Symbol && ex ∈ data_names && ex ∉ param_names && return :(data.$ex)
@@ -136,7 +192,7 @@ macro spec(model_name::Symbol, body::Expr)
 
     make_model_name = Symbol("make_" * lowercase(string(model_name)))
     param_names = Set(s.name for s in param_specs)
-    model_stmts = [_rewrite_data_refs(s, dn, param_names) for s in _lines(model_blk)]
+    model_stmts = [_inline_log_mix(_rewrite_data_refs(s, dn, param_names)) for s in _lines(model_blk)]
     nt_fields = [Expr(:(=), s.name, s.name) for s in param_specs]
 
     out = quote
@@ -146,9 +202,9 @@ macro spec(model_name::Symbol, body::Expr)
 
         function $make_model_name(data::$data_struct_name)
             dim = $dim_expr
-            $(prealloc_stmts...)
 
             ℓ = function(q::Vector{Float64})
+                $(prealloc_stmts...)
                 log_jac = 0.0
                 $(unpack_stmts...)
 
@@ -157,7 +213,7 @@ macro spec(model_name::Symbol, body::Expr)
                 return target + log_jac
             end
 
-            constrain = function(q::Vector{Float64})
+            constrain = function(q::AbstractVector{Float64})
                 $(constrain_stmts...)
                 return $(Expr(:tuple, nt_fields...))
             end

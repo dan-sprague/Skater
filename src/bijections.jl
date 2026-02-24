@@ -78,3 +78,30 @@ function simplex_transform!(x::Vector{Float64}, y::AbstractVector{<:Real})
     x[K] = remaining
     return log_jac
 end
+
+# ── Ordered (cumulative exp transform) ───────────────────────────────────────
+# Maps K unconstrained reals → K ordered reals: y₁ = x₁, yₖ = yₖ₋₁ + exp(xₖ)
+struct OrderedConstraint <: Constraint end
+
+function transform(::OrderedConstraint, x::AbstractVector{<:Real})
+    y = similar(x, Float64)
+    y[1] = x[1]
+    for i in 2:lastindex(x)
+        y[i] = y[i-1] + exp(x[i])
+    end
+    return y
+end
+
+function log_abs_det_jacobian(::OrderedConstraint, x::AbstractVector{<:Real})
+    sum(@view x[2:end])
+end
+
+function ordered_transform!(y::Vector{Float64}, x::AbstractVector{<:Real})
+    y[1] = x[1]
+    log_jac = 0.0
+    for i in 2:length(x)
+        y[i] = y[i-1] + exp(x[i])
+        log_jac += x[i]
+    end
+    return log_jac
+end

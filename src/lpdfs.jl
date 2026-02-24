@@ -1,5 +1,6 @@
 using SpecialFunctions: loggamma, logbeta
-const _LOG_ZERO = -Inf 
+using LinearAlgebra: dot
+const _LOG_ZERO = -Inf
 
 """
     multi_normal_cholesky_lpdf(x, μ, L)
@@ -24,20 +25,28 @@ function multi_normal_cholesky_lpdf(x, μ, L)
     return quad_form + neg_half_log_det + const_term
 end
 
-function multi_normal_diag_lpdf(x, μ, σ)
-    if any(s -> s <= 0, σ)
-        return _LOG_ZERO
-    end
-
-    σ_safe = max.(σ, eps(eltype(float.(σ))))
-    z = (x .- μ) ./ σ_safe
-
-    quad_form = -0.5 * sum(abs2, z)
+# Scalar μ, σ — BLAS dot/sum, zero allocations.
+# ||x - μ·1||² = x·x - 2μ·Σxᵢ + n·μ²
+function multi_normal_diag_lpdf(x, μ::Real, σ::Real)
+    σ <= 0 && return _LOG_ZERO
+    σ_safe = max(σ, eps(Float64))
     n = length(x)
-    log_det = -n * sum(log.(σ_safe))
-    const_term = -0.5 * n * log(2π)
+    ss = dot(x, x) - 2μ * sum(x) + n * μ^2
+    return -0.5 * ss / (σ_safe * σ_safe) - n * log(σ_safe) - 0.5 * n * log(2π)
+end
 
-    return quad_form + log_det + const_term
+# Vector μ, vector σ — element-wise loop, zero allocations.
+function multi_normal_diag_lpdf(x, μ::AbstractVector, σ::AbstractVector)
+    n = length(x)
+    lp = -0.5 * n * log(2π)
+    @inbounds for i in eachindex(x, μ, σ)
+        σi = σ[i]
+        σi <= 0 && return _LOG_ZERO
+        σ_safe = max(σi, eps(Float64))
+        z = (x[i] - μ[i]) / σ_safe
+        lp -= 0.5 * z * z + log(σ_safe)
+    end
+    return lp
 end
 
 function normal_lpdf(x, μ, σ)
