@@ -245,12 +245,41 @@ function student_t_lpdf(x, ν, μ, σ)
 end
 
 function dirichlet_lpdf(x, α)
-    if any(v -> v <= 0, x) || any(v -> v <= 0, α)
-        return _LOG_ZERO
+    K = length(x)
+    length(α) == K || error("dirichlet_lpdf: x and α must have the same length")
+    eps_val = eps(Float64)
+    sum_α = 0.0
+    sum_loggamma_α = 0.0
+    kernel = 0.0
+    for i in 1:K
+        xi = x[i]; αi = α[i]
+        (xi <= 0 || αi <= 0) && return _LOG_ZERO
+        xi_safe = clamp(xi, eps_val, 1.0 - eps_val)
+        αi_safe = max(αi, eps_val)
+        sum_α += αi_safe
+        sum_loggamma_α += loggamma(αi_safe)
+        kernel += (αi_safe - 1) * log(xi_safe)
     end
-    x_safe = clamp.(x, eps(eltype(float.(x))), one(eltype(x)) - eps(eltype(float.(x))))
-    α_safe = max.(α, eps(eltype(float.(α))))
-    return loggamma(sum(α_safe)) - sum(loggamma.(α_safe)) + sum((α_safe .- 1) .* log.(x_safe))
+    return loggamma(sum_α) - sum_loggamma_α + kernel
+end
+
+"""
+    dirichlet_lpdf(x, K::Float64)
+
+Symmetric Dirichlet with α = 1 (uniform over the simplex).
+K is the dimension — equivalent to `dirichlet_lpdf(x, ones(K))` but zero-allocation.
+"""
+function dirichlet_lpdf(x, α::Float64)
+    α > 0 || error("dirichlet_lpdf: α must be positive")
+    K = length(x)
+    eps_val = eps(Float64)
+    α_safe = max(α, eps_val)
+    kernel = 0.0
+    for i in 1:K
+        x[i] <= 0 && return _LOG_ZERO
+        kernel += (α_safe - 1) * log(clamp(x[i], eps_val, 1.0 - eps_val))
+    end
+    return loggamma(K * α_safe) - K * loggamma(α_safe) + kernel
 end
 
 function uniform_lpdf(x, lo, hi)

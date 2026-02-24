@@ -1,4 +1,4 @@
-module Skater
+module Skate
 
 using SpecialFunctions: loggamma, logbeta
 using PositiveFactorizations: cholesky

@@ -47,3 +47,34 @@ function grad_correction(c::Bounded, x)
     s = _logistic(x)
     (c.ub - c.lb) * s * (1.0 - s)
 end
+
+# ── Simplex (stick-breaking transform) ───────────────────────────────────────
+# Maps K-1 unconstrained reals → K-simplex.
+# y_k = z_k * remaining,  where z_k = logistic(x_k - log(K - k))
+# The centering adjustment -log(K-k) makes the uniform prior map to the
+# center of the simplex.
+struct SimplexConstraint <: Constraint end
+
+function simplex_transform(y::AbstractVector{<:Real})
+    Km1 = length(y)
+    K = Km1 + 1
+    x = Vector{Float64}(undef, K)
+    log_jac = simplex_transform!(x, y)
+    return x, log_jac
+end
+
+function simplex_transform!(x::Vector{Float64}, y::AbstractVector{<:Real})
+    Km1 = length(y)
+    K = Km1 + 1
+    log_jac = 0.0
+    remaining = 1.0
+
+    for k in 1:Km1
+        z = _logistic(y[k] - log(K - k))
+        x[k] = z * remaining
+        log_jac += log(z) + log(1.0 - z) + log(remaining)
+        remaining -= x[k]
+    end
+    x[K] = remaining
+    return log_jac
+end
