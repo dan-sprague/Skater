@@ -5,21 +5,6 @@ end
 
 log_prob(m::ModelLogDensity, q) = m.ℓ(q)
 
-abstract type Transformation end
-
-struct IdentityTransformation <: Transformation end
-struct LogTransformation <: Transformation end
-
-transform(::IdentityTransformation, x) = x
-transform(::LogTransformation, x) = exp(x)
-
-log_abs_det_jacobian(::IdentityTransformation, x) = 0.0
-log_abs_det_jacobian(::LogTransformation, x) = x
-
-grad_correction(::IdentityTransformation, x) = 1.0
-grad_correction(::LogTransformation, x) = exp(x)
-
-
 @generated function process_params(q::Vector{Float64}, transforms::T) where {T<:Tuple}
     N = length(T.parameters)
     

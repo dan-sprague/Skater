@@ -5,6 +5,7 @@ using PositiveFactorizations: cholesky
 using LinearAlgebra: dot,diag
 using Enzyme
 
+include("bijections.jl")
 include("lpdfs.jl")
 include("welford.jl")
 include("logdensitygenerator.jl")
