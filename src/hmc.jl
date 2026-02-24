@@ -2,18 +2,16 @@
 
 ### Q REPRESENTS THE POSITION IN PHASE SPACE OF THE PARAMETERS, P REPRESENTS THE MOMENTUM OF THE PARAMETERS. IN HMC, SAMPLE MOMENTUM FROM A GAUSSIAN DISTRIBUTION, AND THEN SIMULATE THE DYNAMICS OF THE SYSTEM TO PROPOSE NEW SAMPLES.
 
-function leapfrog!(q, p, g, model, ∇logp!, ϵ = 0.1)
+function leapfrog!(q, p, g, model, ϵ)
+    p .+= (ϵ / 2) .* g          # half-kick with stored gradient
 
-    ∇logp!(g, model, q)
-    p .+= (ϵ / 2) .* g
+    q .+= ϵ .* p                 # full position step
 
-    q .+= ϵ .* p
+    lp, ok = ∇logp!(g, model, q) 
 
-    ∇logp!(g, model, q)
-    p .+= (ϵ / 2) .* g
+    p .+= (ϵ / 2) .* g          # half-kick with new gradient
 
-    return nothing
-
+    return lp, ok
 end
 
 struct PhaseSpacePoint
@@ -24,10 +22,6 @@ struct HMCState
     curr::PhaseSpacePoint
     proposal::PhaseSpacePoint
     grad::Vector{Float64}
-end
-
-function hamiltonian(q, p, model)
-    return -log_prob(model, q) + 0.5 * sum(abs2, p)
 end
 
 ## Nesterov dual averaging for step size adaptation
@@ -59,16 +53,26 @@ end
 
 adapted_ε(da::DualAveraging) = exp(da.log_ε̄)
 
+## One HMC transition.
 function _hmc_step!(HMC, model, ϵ, L)
     randn!(HMC.curr.p)
     HMC.proposal.q .= HMC.curr.q
     HMC.proposal.p .= HMC.curr.p
-    H_current = hamiltonian(HMC.curr.q, HMC.curr.p, model)
+
+    lp₀, ok = ∇logp!(HMC.grad, model, HMC.proposal.q)
+    if !ok; return 0.0; end
+    H_current = -lp₀ + 0.5 * sum(abs2, HMC.proposal.p)
+
+    lp = lp₀
     for _ in 1:L
-        leapfrog!(HMC.proposal.q, HMC.proposal.p, HMC.grad, model, ∇logp!, ϵ)
+        lp, ok = leapfrog!(HMC.proposal.q, HMC.proposal.p, HMC.grad, model, ϵ)
+        if !ok; return 0.0; end
     end
-    H_proposal = hamiltonian(HMC.proposal.q, HMC.proposal.p, model)
+
+    H_proposal = -lp + 0.5 * sum(abs2, HMC.proposal.p)
+
     α = min(1.0, exp(H_current - H_proposal))
+    if !isfinite(α); α = 0.0; end
     if rand() < α
         HMC.curr.q .= HMC.proposal.q
         HMC.curr.p .= HMC.proposal.p
@@ -110,12 +114,11 @@ function sample(model, num_samples; ϵ = 0.1, L = 10, warmup = 1000)
     printstyled("$num_samples"; color=:white, bold=true)
     printstyled(" samples  ϵ=$(round(ϵ; sigdigits=4))  L=$L\n"; color=:cyan)
 
-    T = Base.promote_op(model.constrain, Vector{Float64})
-    samples = Vector{T}(undef, num_samples)
+    samples = Matrix{Float64}(undef, model.dim, num_samples)
     progress_interval = max(1, num_samples ÷ 10)
     @inbounds for i in 1:num_samples
         _hmc_step!(HMC, model, ϵ, L)
-        samples[i] = model.constrain(HMC.curr.q)
+        samples[:, i] .= HMC.curr.q
         if i % progress_interval == 0
             pct = 100i ÷ num_samples
             printstyled("   $(lpad(pct, 3))%  "; color=:light_black)

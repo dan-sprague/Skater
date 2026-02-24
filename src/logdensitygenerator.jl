@@ -1,6 +1,7 @@
-struct ModelLogDensity{F}
+struct ModelLogDensity{F, G}
     dim::Int
     ℓ::F
+    constrain::G
 end
 
 log_prob(m::ModelLogDensity, q) = m.ℓ(q)

@@ -22,7 +22,7 @@ function _resolve_size(arg, dn::Set{Symbol})
 end
 _lines(b::Expr) = filter(x -> !(x isa LineNumberNode), b.args)
 
-function _parse_data(block::Expr)
+function _parse_constants(block::Expr)
     fields = Expr[]
     names = Symbol[]
     for line in _lines(block)
@@ -53,16 +53,16 @@ macro spec(model_name::Symbol, body::Expr)
         sym = expr.args[1]
         blk = last(filter(a -> a isa Expr, expr.args))
 
-        sym == Symbol("@data")     && (data_blk = blk)
+        sym == Symbol("@constants")     && (data_blk = blk)
         sym == Symbol("@params")   && (params_blk = blk)
         sym == Symbol("@logjoint") && (model_blk = blk)
     end
 
-    data_blk !== nothing || error("Missing @data block")
+    data_blk !== nothing || error("Missing @constants block")
     params_blk !== nothing || error("Missing @params block")
     model_blk !== nothing || error("Missing @logjoint block")
 
-    data_fields, data_names = _parse_data(data_blk)
+    data_fields, data_names = _parse_constants(data_blk)
     dn = Set(data_names)
 
     data_struct_name = Symbol(string(model_name) * "_DataSet")
@@ -72,6 +72,7 @@ macro spec(model_name::Symbol, body::Expr)
     # Build inline unpack + transform + jacobian statements
     # No process_params, no transforms tuple — everything emitted directly
     unpack_stmts = Expr[]
+    constrain_stmts = Expr[]
     prealloc_stmts = Expr[]   # allocated once outside the closure
     idx = 1                   # tracks position in flat q vector (Int or Expr)
     dim_expr::Union{Int,Expr} = 0
@@ -86,6 +87,7 @@ macro spec(model_name::Symbol, body::Expr)
         if s.container == :scalar
             push!(unpack_stmts, :($(s.name) = transform($c, q[$idx])))
             push!(unpack_stmts, :(log_jac += log_abs_det_jacobian($c, q[$idx])))
+            push!(constrain_stmts, :($(s.name) = transform($c, q[$idx])))
             idx = _add(idx, 1)
             dim_expr = _add(dim_expr, 1)
 
@@ -99,6 +101,7 @@ macro spec(model_name::Symbol, body::Expr)
                 end
             end
             push!(unpack_stmts, jac_loop)
+            push!(constrain_stmts, :($(s.name) = [transform($c, q[_i]) for _i in $idx : $stop]))
             idx = _add(idx, n)
             dim_expr = _add(dim_expr, n)
 
@@ -112,14 +115,29 @@ macro spec(model_name::Symbol, body::Expr)
                 log_jac += simplex_transform!($buf_name, @view q[$idx : $stop])
                 $(s.name) = $buf_name
             end)
+            push!(constrain_stmts, :($(s.name) = first(simplex_transform(@view q[$idx : $stop]))))
             idx = _add(idx, Km1)
             dim_expr = _add(dim_expr, Km1)
+
+        elseif s.container == :ordered
+            K = s.sizes[1]  # ordered vector dimension (K → K)
+            stop = _sub(_add(idx, K), 1)
+            buf_name = Symbol("_ordered_buf_", s.name)
+            push!(prealloc_stmts, :($buf_name = Vector{Float64}(undef, $K)))
+            push!(unpack_stmts, quote
+                log_jac += ordered_transform!($buf_name, @view q[$idx : $stop])
+                $(s.name) = $buf_name
+            end)
+            push!(constrain_stmts, :($(s.name) = transform(OrderedConstraint(), @view q[$idx : $stop])))
+            idx = _add(idx, K)
+            dim_expr = _add(dim_expr, K)
         end
     end
 
     make_model_name = Symbol("make_" * lowercase(string(model_name)))
     param_names = Set(s.name for s in param_specs)
     model_stmts = [_rewrite_data_refs(s, dn, param_names) for s in _lines(model_blk)]
+    nt_fields = [Expr(:(=), s.name, s.name) for s in param_specs]
 
     out = quote
         @kwdef struct $data_struct_name
@@ -139,27 +157,16 @@ macro spec(model_name::Symbol, body::Expr)
                 return target + log_jac
             end
 
-            return ModelLogDensity(dim, ℓ)
-        end
+            constrain = function(q::Vector{Float64})
+                $(constrain_stmts...)
+                return $(Expr(:tuple, nt_fields...))
+            end
+            return ModelLogDensity(dim, ℓ, constrain)
+        end;
     end
 
     return esc(out)
 end
-
-ex = quote
-    @data begin
-        x::Int
-        y::Float64
-    end
-    @params begin
-        alpha = param(Vector{Float64}, p)
-        gamma = param(Vector{Float64}, p, lower = 0.0, upper = 1.0)
-
-        beta::Float64
-    end
-end
-
-dump(_lines(ex))
 
 
 
@@ -227,10 +234,12 @@ function _param_to_spec(name::Symbol, args, dn::Set{Symbol})
     # Extract bounds and flags from keywords
     lo = hi = nothing
     is_simplex = false
+    is_ordered = false
     for a in kw_args
         a.args[1] == :lower   && (lo = a.args[2])
         a.args[1] == :upper   && (hi = a.args[2])
         a.args[1] == :simplex && (is_simplex = a.args[2])
+        a.args[1] == :ordered && (is_ordered = a.args[2])
     end
 
     constraint = _make_constraint_expr(lo, hi)
@@ -254,6 +263,11 @@ function _param_to_spec(name::Symbol, args, dn::Set{Symbol})
                     error("@params: simplex params cannot have bounds")
                 return _ParamSpec(name, :(SimplexConstraint()), :simplex, [n])
             end
+            if is_ordered
+                (lo !== nothing || hi !== nothing) &&
+                    error("@params: ordered params cannot have bounds")
+                return _ParamSpec(name, :(OrderedConstraint()), :ordered, [n])
+            end
             return _ParamSpec(name, constraint, :vector, [n])
         elseif base == :Matrix && elem == :Float64
             length(sz_args) == 2 || error("@params: param(Matrix{Float64}, n, m) takes two size arguments")
@@ -267,24 +281,3 @@ function _param_to_spec(name::Symbol, args, dn::Set{Symbol})
     error("@params: unsupported type in param(): $T")
 end
 
-
-@macroexpand @spec Model begin
-    @data begin
-        N::Int
-        x::Vector{Float64}
-        y::Vector{Float64}
-    end
-
-    @params begin
-        mu::Float64
-        sigma = param(Float64; lower = 0.0)
-        alpha = param(Vector{Float64}, 10; lower = 0.0)
-    end
-
-    @logjoint begin
-        for i in 1:data.N
-            target += normal_lpdf(x[i], mu, sigma)
-            target += normal_lpdf(y[i], transform(LowerBounded(0.0), alpha[i]), sigma)
-        end
-    end
-end
