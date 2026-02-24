@@ -15,6 +15,7 @@ Bayesian inference is practically the raison d'être for the Julia language. Int
 DSL
 
 ```julia
+
 include("src/bijections.jl")
 include("src/utilities.jl")
 include("src/logdensitygenerator.jl")
@@ -61,4 +62,5 @@ d = MixtureModel_DataSet(N=N, K=K, x=x_data)
 m = make_mixturemodel(d);
 
 samples = sample(m, 1000; ϵ = 0.01, L = 10)
+
 ```
