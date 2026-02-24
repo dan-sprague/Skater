@@ -13,7 +13,7 @@ import Base.@kwdef
 
 include("src/lang.jl")
 
-@model MixtureModel begin
+@spec MixtureModel begin
     @data begin ## constants and data
         N::Int
         K::Int
