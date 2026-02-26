@@ -166,7 +166,54 @@ function build_tree!(rng, z::PhaseSpacePoint, z_propose::PhaseSpacePoint,
         p_end .= z.p
 
         return !divergent[]
+    else 
+        scr = scratch[depth]
+        fill!(scr.ρ_init, 0.0) # reset to zero
+        scr.log_sum_weight_init[] = -Inf
+
+        valid_init = build_tree!(rng,z,z_propose,
+        p_sharp_beg, scr.p_sharp_init_end,
+        scr.ρ_init, p_beg,scr.p_init_end,
+        depth -1, direction,ϵ,inv_metric,model,∇!,H0,max_deltaH,
+        scratch, scr.log_sum_weight_init, sum_metro_prob, n_leapfrog, divergent)
+        if !valid_init
+            return false
+        end
+
+
+        fill!(scr.ρ_final, 0.0) # reset to zero
+        scr.log_sum_weight_final[] = -Inf
+
+        valid_final = build_tree!(rng, z, scr.z_propose_final,
+        scr.p_sharp_final_beg, p_sharp_end,
+        scr.ρ_final, scr.p_final_beg, p_end,
+        depth - 1, direction, ϵ, inv_metric, model, ∇!, H0, max_deltaH,
+        scratch, scr.log_sum_weight_final, sum_metro_prob, n_leapfrog, divergent)
+        if !valid_final
+            return false
+        end
+
+        log_sum_weight[] = logsumexp(scr.log_sum_weight_init[], scr.log_sum_weight_final[])
+        if rand(rng) < exp(scr.log_sum_weight_final[] - log_sum_weight[])
+            z_propose.q .= scr.z_propose_final.q
+            z_propose.p .= scr.z_propose_final.p
+            z_propose.g .= scr.z_propose_final.g
+            z_propose.V[] = scr.z_propose_final.V[]
+        end
+
+        scr.ρ_tmp .= scr.ρ_init .+ scr.ρ_final
+        ρ .+= scr.ρ_tmp
+
+        return check_uturn(scr.ρ_tmp, p_sharp_beg,p_sharp_end) &&
+        check_uturn(scr.ρ_init, p_sharp_beg, scr.p_sharp_init_end) &&
+        check_uturn(scr.ρ_final, scr.p_sharp_final_beg, p_sharp_end)
+
+
+
     end
+
+
+
 end
 
 
