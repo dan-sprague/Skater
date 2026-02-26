@@ -129,7 +129,7 @@ const TRUE = (
     beta         = [0.3, -0.2, 0.1, -0.15],
     beta_k       = [0.4, -0.3],
     sigma_country = 0.5,
-    mu_country   = [0.2, -0.3, 0.1, 0.0, -0.1, 0.25, -0.15],
+    mu_country   = [0.2, -0.3, 0.1, 0.0],
     mu_k         = log(0.08),
     omega_k      = 0.3,
     gamma_k      = 1.0,
@@ -141,7 +141,7 @@ const TRUE = (
 
 n1, n2 = 3500, 150
 p, p_k = 4, 2
-n_countries = 7
+n_countries = 4
 MRC_MAX = 20
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,3 +307,5 @@ end
 println("-" ^ 82)
 pct = round(100 * n_covered / length(results); digits=1)
 println("Coverage: $n_covered / $(length(results)) ($pct%) of 95% CIs contain the truth")
+
+
