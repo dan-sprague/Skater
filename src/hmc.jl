@@ -2,11 +2,11 @@
 
 ### Q REPRESENTS THE POSITION IN PHASE SPACE OF THE PARAMETERS, P REPRESENTS THE MOMENTUM OF THE PARAMETERS. IN HMC, SAMPLE MOMENTUM FROM A GAUSSIAN DISTRIBUTION, AND THEN SIMULATE THE DYNAMICS OF THE SYSTEM TO PROPOSE NEW SAMPLES.
 
-function leapfrog!(q, p, g, model, ϵ, ∇!)
+function leapfrog!(q, p, g, model, ϵ,inv_metric, ∇!)
     
     @simd for i in eachindex(p)
         p[i] += (ϵ / 2) * g[i]
-        q[i] += ϵ * p[i] 
+        q[i] += ϵ * inv_metric[i] * p[i]
     end
 
     lp, ok = ∇!(g, model, q)
@@ -18,15 +18,20 @@ function leapfrog!(q, p, g, model, ϵ, ∇!)
     return lp, ok
 end
 
+function sample_momentum!(rng,p,inv_metric)
+    @simd for i in eachindex(p)
+        p[i] = randn(rng) * sqrt(inv_metric[i])
+    end
+end 
+
+
 struct PhaseSpacePoint
     q::Vector{Float64}
     p::Vector{Float64}
+    g::Vector{Float64}
+    V::Ref{Float64}
 end
-struct HMCState
-    curr::PhaseSpacePoint
-    proposal::PhaseSpacePoint
-    grad::Vector{Float64}
-end
+
 
 ## Nesterov dual averaging for step size adaptation
 mutable struct DualAveraging
@@ -57,11 +62,84 @@ end
 
 adapted_ε(da::DualAveraging) = exp(da.log_ε̄)
 
+function kinetic_energy(p, inv_metric)
+   k = 0.0
+   @simd for i in eachindex(p)
+        k += 0.5 * inv_metric[i] * p[i]^2
+   end 
+   k 
+end
+
+function find_reasonable_epsilon(rng, z, model, inv_metric, ∇!)
+    ϵ = 1.0
+    p_save = copy(z.p)
+
+    for _ in 1:20
+        sample_momentum!(rng, z.p, inv_metric)
+        H = z.V[] + kinetic_energy(z.p, inv_metric)
+
+        q_try = copy(z.q)
+        p_try = copy(z.p)
+        g_try = copy(z.g)
+        lp, ok = leapfrog!(q_try, p_try, g_try, model, ϵ, inv_metric, ∇!)
+
+        if !ok
+            ϵ /= 2.0
+            continue
+        end
+
+        V_try = -lp
+        H_new = V_try + kinetic_energy(p_try, inv_metric)
+        acc_ratio = isfinite(H_new) ? exp(min(H - H_new, 0.0)) : 0.0
+
+        acc_ratio > 0.25 ? ϵ *= 2.0 : ϵ /= 2.0
+    end
+
+    z.p .= p_save
+    max(ϵ, 1e-4)
+end
+
+
+function compute_p_sharp!(out,p,inv_metric)
+    @simd for i in eachindex(p)
+        out[i] = inv_metric[i] * p[i]
+    end
+end
+
+function check_uturn(ρ, p_sharp_start, p_sharp_end)
+    dot(ρ, p_sharp_start) < 0 || dot(ρ, p_sharp_end) < 0
+end
+
+struct TreeScratch
+    ρ_init::Vector{Float64}
+    ρ_final::Vector{Float64}
+    p_init_end::Vector{Float64}
+    p_sharp_init_end::Vector{Float64}
+    p_final_beg::Vector{Float64}
+    p_sharp_final_beg::Vector{Float64}
+    ρ_tmp::Vector{Float64}
+    z_propose_final::PhaseSpacePoint
+    log_sum_weight_init::Ref{Float64}
+    log_sum_weight_final::Ref{Float64}
+end
+
+function TreeScratch(dim::Int)
+    TreeScratch(
+        zeros(dim), zeros(dim), zeros(dim), zeros(dim),
+        zeros(dim), zeros(dim), zeros(dim),
+        PhaseSpacePoint(zeros(dim), zeros(dim), zeros(dim), Ref(0.0)),
+        Ref(-Inf), Ref(-Inf)
+    )
+end
+
+
 ## One HMC transition.  Returns (α, divergent).
-function _hmc_step!(HMC, model, ϵ, L, ∇!)
+function _hmc_step!(HMC, model, ϵ, max_depth, ∇!)
     randn!(HMC.curr.p)
     HMC.proposal.q .= HMC.curr.q
     HMC.proposal.p .= HMC.curr.p
+
+    scratch = [TreeScratch(model.dim) for _ in 1:max_depth]
 
     lp₀, ok = ∇!(HMC.grad, model, HMC.proposal.q)
     if !ok
@@ -69,15 +147,15 @@ function _hmc_step!(HMC, model, ϵ, L, ∇!)
         randn!(HMC.curr.q)
         return 0.0, true
     end
-    H_current = -lp₀ + 0.5 * sum(abs2, HMC.proposal.p)
+    H_current = -lp₀ + kinetic_energy(HMC.proposal.p, HMC.inv_metric)
 
     lp = lp₀
     for _ in 1:L
-        lp, ok = leapfrog!(HMC.proposal.q, HMC.proposal.p, HMC.grad, model, ϵ, ∇!)
+        lp, ok = leapfrog!(HMC.proposal.q, HMC.proposal.p, HMC.grad, model, ϵ, HMC.inv_metric, ∇!)
         if !ok; return 0.0, true; end
     end
 
-    H_proposal = -lp + 0.5 * sum(abs2, HMC.proposal.p)
+    H_proposal = -lp + kinetic_energy(HMC.proposal.p, HMC.inv_metric)
     ΔH = H_proposal - H_current
     divergent = !isfinite(ΔH) || ΔH > 1000.0
 
