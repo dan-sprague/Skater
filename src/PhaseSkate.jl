@@ -5,7 +5,7 @@ using Random: randn, randn!, Xoshiro
 using LinearAlgebra: dot
 using Statistics
 using Printf: @sprintf
-using SpecialFunctions: gamma_inc, loggamma, logbeta
+using SpecialFunctions: gamma_inc, loggamma, logbeta, erfinv
 
 import Base.@kwdef
 import Statistics: mean
@@ -20,7 +20,7 @@ include("chains.jl")
 include("lang.jl")
 include("sbc.jl")
 
-export @skate, sample, log_prob, ModelLogDensity,
+export @skate, make, sample, log_prob, ModelLogDensity,
        sbc, SBCResult, calibrated,
        Chains, samples, mean, ci, thin, min_ess,
        cholesky,

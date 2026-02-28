@@ -115,36 +115,25 @@ function find_reasonable_epsilon(rng, z, model, inv_metric, ∇!)
 end
 
 
-function compute_p_sharp!(out,p,inv_metric)
-    @simd for i in eachindex(p)
-        out[i] = inv_metric[i] * p[i]
+function check_uturn(ρ, p_start, p_end, inv_metric)
+    s1 = 0.0
+    s2 = 0.0
+    @inbounds @simd for i in eachindex(ρ)
+        m = inv_metric[i]
+        s1 += ρ[i] * m * p_start[i]
+        s2 += ρ[i] * m * p_end[i]
     end
-end
-
-function check_uturn(ρ, p_sharp_start, p_sharp_end)
-    dot(ρ, p_sharp_start) > 0 && dot(ρ, p_sharp_end) > 0
+    s1 > 0 && s2 > 0
 end
 
 struct TreeScratch
     ρ_init::Vector{Float64}
     ρ_final::Vector{Float64}
     p_init_end::Vector{Float64}
-    p_sharp_init_end::Vector{Float64}
     p_final_beg::Vector{Float64}
-    p_sharp_final_beg::Vector{Float64}
-    ρ_tmp::Vector{Float64}
     z_propose_final::PhaseSpacePoint
     log_sum_weight_init::Ref{Float64}
     log_sum_weight_final::Ref{Float64}
-end
-
-function TreeScratch(dim::Int)
-    TreeScratch(
-        zeros(dim), zeros(dim), zeros(dim), zeros(dim),
-        zeros(dim), zeros(dim), zeros(dim),
-        PhaseSpacePoint(zeros(dim), zeros(dim), zeros(dim), 0.0),
-        Ref(-Inf), Ref(-Inf)
-    )
 end
 
 struct NUTSScratch
@@ -152,12 +141,8 @@ struct NUTSScratch
     z_fwd::PhaseSpacePoint
     z_bwd::PhaseSpacePoint
     z_propose_new::PhaseSpacePoint
-    p_sharp_fwd::Vector{Float64}
-    p_sharp_bwd::Vector{Float64}
     ρ::Vector{Float64}
     ρ_new::Vector{Float64}
-    p_sharp_new_beg::Vector{Float64}
-    p_sharp_new_end::Vector{Float64}
     p_new_beg::Vector{Float64}
     p_new_end::Vector{Float64}
     log_sum_weight::Ref{Float64}
@@ -168,21 +153,29 @@ struct NUTSScratch
     tree::Vector{TreeScratch}
 end
 
+function TreeScratch(dim::Int)
+    TreeScratch(
+        zeros(dim), zeros(dim), zeros(dim), zeros(dim),
+        PhaseSpacePoint(zeros(dim), zeros(dim), zeros(dim), 0.0),
+        Ref(-Inf), Ref(-Inf)
+    )
+end
+
 function NUTSScratch(dim::Int, max_depth::Int)
     NUTSScratch(
         PhaseSpacePoint(zeros(dim), zeros(dim), zeros(dim), 0.0),
         PhaseSpacePoint(zeros(dim), zeros(dim), zeros(dim), 0.0),
         PhaseSpacePoint(zeros(dim), zeros(dim), zeros(dim), 0.0),
         PhaseSpacePoint(zeros(dim), zeros(dim), zeros(dim), 0.0),
-        zeros(dim), zeros(dim), zeros(dim), zeros(dim),
-        zeros(dim), zeros(dim), zeros(dim), zeros(dim),
+        zeros(dim), zeros(dim),
+        zeros(dim), zeros(dim),
         Ref(0.0), Ref(-Inf), Ref(0.0), Ref(0), Ref(false),
         [TreeScratch(dim) for _ in 1:max_depth]
     )
 end
 
 function build_tree!(rng, z::PhaseSpacePoint, z_propose::PhaseSpacePoint,
-    p_sharp_beg, p_sharp_end, ρ, p_beg, p_end,
+    ρ, p_beg, p_end,
     depth, direction, ϵ, inv_metric, model, ∇!, H0, max_deltaH,
     scratch, log_sum_weight, sum_metro_prob, n_leapfrog, divergent)
 
@@ -202,41 +195,34 @@ function build_tree!(rng, z::PhaseSpacePoint, z_propose::PhaseSpacePoint,
         sum_metro_prob[] += H0 - H > 0 ? 1.0 : exp(H0 - H)
 
         z_propose.q .= z.q
-        z_propose.p .= z.p
         z_propose.g .= z.g
         z_propose.V = z.V
-
-        compute_p_sharp!(p_sharp_beg, z.p, inv_metric)
-        p_sharp_end .= p_sharp_beg
 
         ρ .+= z.p
         p_beg .= z.p
         p_end .= z.p
 
         return !divergent[]
-    else 
+    else
         scr = scratch[depth]
-        fill!(scr.ρ_init, 0.0) # reset to zero
+        fill!(scr.ρ_init, 0.0)
         scr.log_sum_weight_init[] = -Inf
 
-        valid_init = build_tree!(rng,z,z_propose,
-        p_sharp_beg, scr.p_sharp_init_end,
-        scr.ρ_init, p_beg,scr.p_init_end,
-        depth -1, direction,ϵ,inv_metric,model,∇!,H0,max_deltaH,
-        scratch, scr.log_sum_weight_init, sum_metro_prob, n_leapfrog, divergent)
+        valid_init = build_tree!(rng, z, z_propose,
+            scr.ρ_init, p_beg, scr.p_init_end,
+            depth - 1, direction, ϵ, inv_metric, model, ∇!, H0, max_deltaH,
+            scratch, scr.log_sum_weight_init, sum_metro_prob, n_leapfrog, divergent)
         if !valid_init
             return false
         end
 
-
-        fill!(scr.ρ_final, 0.0) # reset to zero
+        fill!(scr.ρ_final, 0.0)
         scr.log_sum_weight_final[] = -Inf
 
         valid_final = build_tree!(rng, z, scr.z_propose_final,
-        scr.p_sharp_final_beg, p_sharp_end,
-        scr.ρ_final, scr.p_final_beg, p_end,
-        depth - 1, direction, ϵ, inv_metric, model, ∇!, H0, max_deltaH,
-        scratch, scr.log_sum_weight_final, sum_metro_prob, n_leapfrog, divergent)
+            scr.ρ_final, scr.p_final_beg, p_end,
+            depth - 1, direction, ϵ, inv_metric, model, ∇!, H0, max_deltaH,
+            scratch, scr.log_sum_weight_final, sum_metro_prob, n_leapfrog, divergent)
         if !valid_final
             return false
         end
@@ -244,24 +230,21 @@ function build_tree!(rng, z::PhaseSpacePoint, z_propose::PhaseSpacePoint,
         log_sum_weight[] = logsumexp(scr.log_sum_weight_init[], scr.log_sum_weight_final[])
         if rand(rng) < exp(scr.log_sum_weight_final[] - log_sum_weight[])
             z_propose.q .= scr.z_propose_final.q
-            z_propose.p .= scr.z_propose_final.p
             z_propose.g .= scr.z_propose_final.g
             z_propose.V = scr.z_propose_final.V
         end
 
-        @. scr.ρ_tmp = scr.ρ_init + scr.ρ_final
-        ρ .+= scr.ρ_tmp
+        # Sub-tree u-turn checks (before combining clobbers ρ_init)
+        valid_init_uturn = check_uturn(scr.ρ_init, p_beg, scr.p_init_end, inv_metric)
+        valid_final_uturn = check_uturn(scr.ρ_final, scr.p_final_beg, p_end, inv_metric)
 
-        return check_uturn(scr.ρ_tmp, p_sharp_beg,p_sharp_end) &&
-        check_uturn(scr.ρ_init, p_sharp_beg, scr.p_sharp_init_end) &&
-        check_uturn(scr.ρ_final, scr.p_sharp_final_beg, p_sharp_end)
+        # Combine momentum sums — reuse ρ_init for the combined sum
+        scr.ρ_init .+= scr.ρ_final
+        ρ .+= scr.ρ_init
 
-
-
+        return check_uturn(scr.ρ_init, p_beg, p_end, inv_metric) &&
+               valid_init_uturn && valid_final_uturn
     end
-
-
-
 end
 
 
@@ -280,14 +263,14 @@ function _nuts_transition!(rng, z, ns::NUTSScratch, model, ϵ, max_depth, inv_me
     # Initial Hamiltonian
     H0 = z.V + kinetic_energy(z.p, inv_metric)
 
-    # Initialize forward/backward walkers and proposal to current position
+    # Initialize forward/backward walkers to current position (need full copy incl. p)
     _copy_psp!(ns.z_fwd, z)
     _copy_psp!(ns.z_bwd, z)
-    _copy_psp!(ns.z_propose, z)
 
-    # Initialize edge velocities
-    compute_p_sharp!(ns.p_sharp_fwd, z.p, inv_metric)
-    ns.p_sharp_bwd .= ns.p_sharp_fwd
+    # Initialize proposal (p not needed — only q, g, V are used from proposals)
+    ns.z_propose.q .= z.q
+    ns.z_propose.g .= z.g
+    ns.z_propose.V = z.V
 
     # Initialize momentum sum
     ns.ρ .= z.p
@@ -308,18 +291,14 @@ function _nuts_transition!(rng, z, ns::NUTSScratch, model, ϵ, max_depth, inv_me
         # Build new subtree extending in chosen direction
         if direction == 1
             valid = build_tree!(rng, ns.z_fwd, ns.z_propose_new,
-                ns.p_sharp_new_beg, ns.p_sharp_new_end,
                 ns.ρ_new, ns.p_new_beg, ns.p_new_end,
                 depth, direction, ϵ, inv_metric, model, ∇!, H0, 1000.0,
                 ns.tree, ns.log_sum_weight_new, ns.sum_metro_prob, ns.n_leapfrog, ns.divergent)
-            ns.p_sharp_fwd .= ns.p_sharp_new_end
         else
             valid = build_tree!(rng, ns.z_bwd, ns.z_propose_new,
-                ns.p_sharp_new_beg, ns.p_sharp_new_end,
                 ns.ρ_new, ns.p_new_beg, ns.p_new_end,
                 depth, direction, ϵ, inv_metric, model, ∇!, H0, 1000.0,
                 ns.tree, ns.log_sum_weight_new, ns.sum_metro_prob, ns.n_leapfrog, ns.divergent)
-            ns.p_sharp_bwd .= ns.p_sharp_new_end
         end
 
         if !valid
@@ -329,15 +308,17 @@ function _nuts_transition!(rng, z, ns::NUTSScratch, model, ϵ, max_depth, inv_me
         # Multinomial coin flip: replace proposal with new subtree's?
         log_sum_weight_total = logsumexp(ns.log_sum_weight[], ns.log_sum_weight_new[])
         if rand(rng) < exp(ns.log_sum_weight_new[] - log_sum_weight_total)
-            _copy_psp!(ns.z_propose, ns.z_propose_new)
+            ns.z_propose.q .= ns.z_propose_new.q
+            ns.z_propose.g .= ns.z_propose_new.g
+            ns.z_propose.V = ns.z_propose_new.V
         end
         ns.log_sum_weight[] = log_sum_weight_total
 
         # Accumulate momentum
         ns.ρ .+= ns.ρ_new
 
-        # U-turn check on full trajectory
-        if !check_uturn(ns.ρ, ns.p_sharp_bwd, ns.p_sharp_fwd)
+        # U-turn check — walker PSPs track boundary momenta directly
+        if !check_uturn(ns.ρ, ns.z_bwd.p, ns.z_fwd.p, inv_metric)
             break
         end
     end

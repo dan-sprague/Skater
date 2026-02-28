@@ -632,6 +632,49 @@ function _expand_for_annotations(stmts, param_specs, data_fields)
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# CPU log_mix inlining (if/else + log1p version)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+"""
+Inline `log_mix` calls into closure-free log-sum-exp loops.
+CPU version: uses if/else + log1p for numerical stability.
+"""
+function _inline_log_mix(ex)
+    ex isa Expr || return ex
+    ex = Expr(ex.head, [_inline_log_mix(a) for a in ex.args]...)
+
+    weights, params, body = _extract_log_mix(ex)
+    weights === nothing && return ex
+
+    j = if params isa Symbol
+        params
+    elseif params isa Expr && params.head == :tuple && length(params.args) == 1
+        params.args[1]
+    else
+        return ex
+    end
+
+    acc = gensym(:lse_acc)
+    lp  = gensym(:lse_lp)
+    jj  = gensym(:lse_j)
+    body_1  = _subst_var(body, j, 1)
+    body_jj = _subst_var(body, j, jj)
+
+    return quote
+        $acc = log($weights[1]) + $body_1
+        for $jj in 2:length($weights)
+            $lp = log($weights[$jj]) + $body_jj
+            if $lp > $acc
+                $acc = $lp + log1p(exp($acc - $lp))
+            else
+                $acc = $acc + log1p(exp($lp - $acc))
+            end
+        end
+        $acc
+    end
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Compile-time arithmetic helpers (constant-fold when both args are Int)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -668,7 +711,7 @@ macro skate(model_name::Symbol, body::Expr)
     data_fields, data_names = _parse_constants(data_blk)
     dn = Set(data_names)
 
-    data_struct_name = Symbol(string(model_name) * "_DataSet")
+    data_struct_name = Symbol(string(model_name) * "Data")
 
     param_specs = _parse_params(params_blk, dn)
 
@@ -835,7 +878,6 @@ macro skate(model_name::Symbol, body::Expr)
         end
     end
 
-    make_model_name = Symbol("make_" * lowercase(string(model_name)))
     param_names = Set(s.name for s in param_specs)
     raw_stmts = [_rewrite_data_refs(s, dn, param_names) for s in _lines(model_blk)]
     expanded_stmts = _expand_for_annotations(raw_stmts, param_specs, data_fields)
@@ -858,7 +900,7 @@ macro skate(model_name::Symbol, body::Expr)
             $(data_fields...)
         end
 
-        function $make_model_name(data::$data_struct_name)
+        function make(data::$data_struct_name)
             dim = $dim_expr
 
             ℓ = function(q::Vector{Float64})

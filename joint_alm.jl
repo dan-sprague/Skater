@@ -226,7 +226,7 @@ println("  MRC obs: $total_mrc_obs")
 # Instantiate & sample
 # ─────────────────────────────────────────────────────────────────────────────
 
-d = JointALM_DataSet(
+d = JointALMData(
     n1=n1, n2=n2, p=p, n_countries=n_countries, MRC_MAX=MRC_MAX,
     tier1_times=tier1_times, tier1_X=tier1_X,
     tier1_country_ids=tier1_country_ids,
@@ -238,7 +238,7 @@ d = JointALM_DataSet(
     mrc_times_flat=mrc_times_flat, mrc_patient_ids=mrc_patient_ids
 )
 
-m = make_jointalm(d)
+m = make(d)
 println("\nJoint ALM Model — dim=$(m.dim)")
 
 q_test = randn(m.dim)
@@ -247,5 +247,5 @@ println("Test log_prob = $(round(lp; sigdigits=4))")
 @assert isfinite(lp) "log_prob is not finite at test point"
 
 println("\nSampling 10000 draws (500 warmup)...")
-@time samples = Skate.sample(m, 2000; ϵ=0.1, max_depth=8, warmup=1000,chains=4);
+@time samples = sample(m, 2000; ϵ=0.1, max_depth=8, warmup=1000,chains=4);
 println("Done — $(length(samples)) draws\n")
