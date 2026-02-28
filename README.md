@@ -6,11 +6,11 @@ A native Julia implementation of the Stan approach to Bayesian inference. Built 
 
 ## Design Philosophy
 
-1. Clarity - the `@spec` that defines the Skate DSL is a complete description of the information needed by a reader (and the compiler!!) to understand the model. What this means in practice is that the information flowing into the model is not scattered across an analysis script. The `@spec` block, while technical, is visually distinct, cohesive, and defines everything. Stan got this right.
-2. Type stability, up front - Skate requires the user to be explicit about types and dimensions up front. This package is built on the belief that this is good practice and saves time and confusion for the user. No need to wonder if your code is type stable or not!
-3. Fast, native Julia - Skate was built to match or exceed Stan's sampling speed while remaining 100% Julia.
+1. Speed - I built PhaseSkate because I needed a tool that could handle the large, messy and complex data+models of Biology. To do this, PhaseSkate was built **for** Enzyme with minimal external dependencies, with an emphasis on type stability and pure LPDF functions.
+2. Clarity - the `@spec` that defines the Skate DSL is a complete description of the information needed by a reader (and the compiler!!) to understand the model. What this means in practice is that the information flowing into the model is not scattered across an analysis script. The `@spec` block, while technical, is visually distinct, cohesive, and defines everything. Stan got this right.
 
-Bayesian inference is practically the raison d'être for the Julia language. Intensive, CPU bound numerical computations of complex gradients and at its heart a physics simulation of a particle flying around phase-space. I built this package because I became increasingly upset that I always found myself returning to Stan.
+
+Bayesian inference is an area where the Julia language should shine. HMC is intensive, CPU bound numerical computations of complex gradients and at its heart a physics simulation of a particle flying around phase-space. I built this package because I became increasingly upset that I always found myself returning to Stan.
 
 DSL
 
