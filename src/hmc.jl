@@ -409,7 +409,7 @@ function _make_grad(model; ad = :auto)
 end
 
 """Run a single NUTS chain: warmup + sampling. Returns (raw_samples::Matrix, n_divergent)."""
-function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; chain_id = 1, quiet = false, δ = 0.8)
+function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; chain_id = 1, quiet = false, δ = 0.8, print_lock = ReentrantLock())
     dim = model.dim
     ns = NUTSScratch(dim, max_depth)
 
@@ -429,8 +429,10 @@ function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; cha
     ϵ = find_reasonable_epsilon(rng, z, model, inv_metric, ∇!)
 
     if !quiet
-        printstyled("  Chain $chain_id  "; color=:yellow, bold=true)
-        printstyled("warmup $warmup iterations  ϵ₀=$(round(ϵ; sigdigits=3))\n"; color=:yellow)
+        lock(print_lock) do
+            printstyled("  Chain $chain_id  "; color=:yellow, bold=true)
+            printstyled("warmup $warmup iterations  ϵ₀=$(round(ϵ; sigdigits=3))\n"; color=:yellow)
+        end
     end
 
     ## ── Stan-style three-phase windowed warmup ──
@@ -491,10 +493,12 @@ function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; cha
     ϵ_adapted = adapted_ε(da)
 
     if !quiet
-        printstyled("  Chain $chain_id  "; color=:green, bold=true)
-        printstyled("adapted ϵ = $(round(ϵ_adapted; sigdigits=4))\n"; color=:white, bold=true)
-        if n_warmup_div > 0
-            printstyled("  Chain $chain_id  ⚠ $n_warmup_div divergent transitions during warmup\n"; color=:yellow)
+        lock(print_lock) do
+            printstyled("  Chain $chain_id  "; color=:green, bold=true)
+            printstyled("adapted ϵ = $(round(ϵ_adapted; sigdigits=4))\n"; color=:white, bold=true)
+            if n_warmup_div > 0
+                printstyled("  Chain $chain_id  ⚠ $n_warmup_div divergent transitions during warmup\n"; color=:yellow)
+            end
         end
     end
 
@@ -510,21 +514,25 @@ function _run_chain(rng, model, num_samples, ϵ₀, max_depth, warmup, ∇!; cha
         total_leapfrog += ns.n_leapfrog[]
         raw[:, i] .= z.q
         if !quiet && i % progress_interval == 0
-            pct = 100i ÷ num_samples
-            printstyled("  Chain $chain_id  $(lpad(pct, 3))%  $i/$num_samples\n"; color=:light_black)
+            lock(print_lock) do
+                pct = 100i ÷ num_samples
+                printstyled("  Chain $chain_id  $(lpad(pct, 3))%  $i/$num_samples\n"; color=:light_black)
+            end
         end
     end
     elapsed_s = (time_ns() - t_sample_start) / 1e9
 
     if !quiet
-        avg_lf = total_leapfrog / num_samples
-        μs_per_lf = elapsed_s * 1e6 / total_leapfrog
-        printstyled("  Chain $chain_id  "; color=:green, bold=true)
-        printstyled("$(num_samples) samples, $(total_leapfrog) leapfrog steps (avg $(round(avg_lf; digits=1))/sample), ")
-        printstyled("$(round(μs_per_lf; digits=1)) μs/step, ")
-        printstyled("$(round(elapsed_s; digits=2))s total\n")
-        if n_divergent > 0
-            printstyled("  Chain $chain_id  ⚠ $n_divergent divergent transitions\n"; color=:yellow)
+        lock(print_lock) do
+            avg_lf = total_leapfrog / num_samples
+            μs_per_lf = elapsed_s * 1e6 / total_leapfrog
+            printstyled("  Chain $chain_id  "; color=:green, bold=true)
+            printstyled("$(num_samples) samples, $(total_leapfrog) leapfrog steps (avg $(round(avg_lf; digits=1))/sample), ")
+            printstyled("$(round(μs_per_lf; digits=1)) μs/step, ")
+            printstyled("$(round(elapsed_s; digits=2))s total\n")
+            if n_divergent > 0
+                printstyled("  Chain $chain_id  ⚠ $n_divergent divergent transitions\n"; color=:yellow)
+            end
         end
     end
 
@@ -542,9 +550,11 @@ function sample(model, num_samples; ϵ = 0.1, max_depth = 10, warmup = 1000, ad 
     printstyled("$chains chain(s) × $num_samples samples"; color=:white, bold=true)
     printstyled("  max_depth=$max_depth\n"; color=:cyan)
 
+    print_lock = ReentrantLock()
+
     tasks = [Threads.@spawn _run_chain(Xoshiro(chain_seeds[c]),
                                         model, num_samples, ϵ, max_depth, warmup, ∇!;
-                                        chain_id=c, quiet=false, δ)
+                                        chain_id=c, quiet=false, δ, print_lock)
              for c in 1:chains]
 
     raw_chains = Vector{Matrix{Float64}}(undef, chains)

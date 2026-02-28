@@ -14,7 +14,6 @@ using Distributions: Weibull, Exponential, BetaBinomial
         n1::Int
         n2::Int
         p::Int
-        p_k::Int
         n_countries::Int
         MRC_MAX::Int
         tier1_times::Vector{Float64}
@@ -36,10 +35,12 @@ using Distributions: Weibull, Exponential, BetaBinomial
     @params begin
         log_shape::Float64
         log_scale::Float64
-        beta       = param(Vector{Float64}, p)
-        beta_k     = param(Vector{Float64}, p_k)
-        sigma_country = param(Float64; lower=0.0)
-        mu_country = param(Vector{Float64}, n_countries)
+        beta_s     = param(Vector{Float64}, p)
+        beta_k     = param(Vector{Float64}, p)
+        sigma_country_k = param(Float64; lower=0.0)
+        sigma_country_s = param(Float64; lower=0.0)
+        mu_country_k = param(Vector{Float64}, n_countries)
+        mu_country_s = param(Vector{Float64}, n_countries)
         mu_k::Float64
         omega_k    = param(Float64; lower=0.0)
         gamma_k::Float64
@@ -48,7 +49,6 @@ using Distributions: Weibull, Exponential, BetaBinomial
         log_phi::Float64
         P0         = param(Float64; lower=0.0, upper=1.0)
         z_k        = param(Vector{Float64}, n2)
-        z_k1       = param(Vector{Float64}, n1)
     end
 
     @logjoint begin
@@ -62,10 +62,12 @@ using Distributions: Weibull, Exponential, BetaBinomial
         # ── Priors ──
         target += normal_lpdf(log_shape, 0.2, 0.5)
         target += normal_lpdf(log_scale, 2.5, 1.0)
-        target += multi_normal_diag_lpdf(beta, 0.0, 2.0)
+        target += multi_normal_diag_lpdf(beta_s, 0.0, 2.0)
         target += multi_normal_diag_lpdf(beta_k, 0.0, 0.5)
-        target += cauchy_lpdf(sigma_country, 0.0, 1.0)
-        target += multi_normal_diag_lpdf(mu_country, 0.0, sigma_country)
+        target += cauchy_lpdf(sigma_country_k, 0.0, 0.5)
+        target += cauchy_lpdf(sigma_country_s, 0.0, 1.0)
+        target += multi_normal_diag_lpdf(mu_country_k, 0.0, sigma_country_k)
+        target += multi_normal_diag_lpdf(mu_country_s, 0.0, sigma_country_s)
         target += normal_lpdf(mu_k, log(0.08), 0.5)
         target += cauchy_lpdf(omega_k, 0.0, 0.5)
         target += normal_lpdf(gamma_k, 1.0, 0.5)
@@ -74,13 +76,11 @@ using Distributions: Weibull, Exponential, BetaBinomial
         target += normal_lpdf(log_phi, log(15.0), 0.5)
         target += beta_lpdf(P0, 2.0, 8.0)
         target += multi_normal_diag_lpdf(z_k, 0.0, 1.0)
-        target += multi_normal_diag_lpdf(z_k1, 0.0, 1.0)
 
         # ── Tier 2: log_k_2, log_eff_scale_2 ──
         @for begin
-            ce_2 = mu_country[tier2_country_ids]
-            log_k_2 = mu_k .+ (tier2_X[:, 1:p_k] * beta_k) .+ (ce_2 .* 0.1) .+ (omega_k .* z_k)
-            log_eff_scale_2 = log_scale .- ((tier2_X * beta) .+ ce_2 .+ gamma_k .* log_k_2) .* inv_shape
+            log_k_2 = mu_k .+ (tier2_X * beta_k) .+ mu_country_k[tier2_country_ids] .+ (omega_k .* z_k)
+            log_eff_scale_2 = log_scale .- ((tier2_X * beta_s) .+ mu_country_s[tier2_country_ids] .+ gamma_k .* log_k_2) .* inv_shape
         end
 
         for idx in tier2_obs_idx
@@ -92,9 +92,8 @@ using Distributions: Weibull, Exponential, BetaBinomial
 
         # ── Tier 1: log_eff_scale_1 ──
         @for begin
-            ce_1 = mu_country[tier1_country_ids]
-            log_k_1 = mu_k .+ (tier1_X[:, 1:p_k] * beta_k) .+ (ce_1 .* 0.1) .+ (omega_k .* z_k1)
-            log_eff_scale_1 = log_scale .- ((tier1_X * beta) .+ ce_1 .+ gamma_k .* log_k_1) .* inv_shape
+            log_k_1 = mu_k .+ (tier1_X * beta_k) .+ mu_country_k[tier1_country_ids]
+            log_eff_scale_1 = log_scale .- ((tier1_X * beta_s) .+ mu_country_s[tier1_country_ids] .+ gamma_k .* log_k_1) .* inv_shape
         end
 
         for idx in tier1_obs_idx
@@ -124,23 +123,25 @@ end
 Random.seed!(42)
 
 const TRUE = (
-    log_shape    = 0.2,
-    log_scale    = 2.5,
-    beta         = [0.3, -0.2, 0.1, -0.15],
-    beta_k       = [0.4, -0.3],
-    sigma_country = 0.5,
-    mu_country   = [0.2, -0.3, 0.1, 0.0],
-    mu_k         = log(0.08),
-    omega_k      = 0.3,
-    gamma_k      = 1.0,
-    gamma_hill   = 3.0,
-    EC50         = 0.4,
-    log_phi      = log(15.0),
-    P0           = 0.2,
+    log_shape      = 0.2,
+    log_scale      = 2.5,
+    beta_s         = [0.3, -0.2, 0.1, -0.15],
+    beta_k         = [0.4, -0.3, 0.15, -0.1],
+    sigma_country_k = 0.1,
+    sigma_country_s = 0.5,
+    mu_country_k   = [0.05, -0.08, 0.03, 0.0],
+    mu_country_s   = [0.2, -0.3, 0.1, 0.0],
+    mu_k           = log(0.08),
+    omega_k        = 0.3,
+    gamma_k        = 1.0,
+    gamma_hill     = 3.0,
+    EC50           = 0.4,
+    log_phi        = log(15.0),
+    P0             = 0.2,
 )
 
 n1, n2 = 3500, 150
-p, p_k = 4, 2
+p = 4
 n_countries = 4
 MRC_MAX = 20
 
@@ -153,7 +154,7 @@ scale_true = exp(TRUE.log_scale)
 phi_true   = exp(TRUE.log_phi)
 
 true_z_k  = randn(n2)
-true_z_k1 = randn(n1)
+_ = randn(n1)  # consume RNG state to keep data identical
 
 tier1_X = randn(n1, p)
 tier1_country_ids = rand(1:n_countries, n1)
@@ -164,11 +165,12 @@ tier2_country_ids = rand(1:n_countries, n2)
 tier2_times = Vector{Float64}(undef, n2)
 true_log_k_2 = Vector{Float64}(undef, n2)
 for i in 1:n2
-    xbk = sum(tier2_X[i, j] * TRUE.beta_k[j] for j in 1:p_k)
-    xb  = sum(tier2_X[i, j] * TRUE.beta[j]   for j in 1:p)
-    ce  = TRUE.mu_country[tier2_country_ids[i]]
-    true_log_k_2[i] = TRUE.mu_k + xbk + ce * 0.1 + TRUE.omega_k * true_z_k[i]
-    log_eff_scale = TRUE.log_scale - (xb + ce + TRUE.gamma_k * true_log_k_2[i]) / shape_true
+    xbk = sum(tier2_X[i, j] * TRUE.beta_k[j] for j in 1:p)
+    xbs = sum(tier2_X[i, j] * TRUE.beta_s[j] for j in 1:p)
+    ce_k = TRUE.mu_country_k[tier2_country_ids[i]]
+    ce_s = TRUE.mu_country_s[tier2_country_ids[i]]
+    true_log_k_2[i] = TRUE.mu_k + xbk + ce_k + TRUE.omega_k * true_z_k[i]
+    log_eff_scale = TRUE.log_scale - (xbs + ce_s + TRUE.gamma_k * true_log_k_2[i]) / shape_true
     tier2_times[i] = rand(Weibull(shape_true, exp(log_eff_scale)))
 end
 cens_times_2 = rand(Exponential(median(tier2_times) * 1.5), n2)
@@ -180,11 +182,12 @@ tier2_cens_idx = findall(.!tier2_observed)
 # Tier 1 survival
 tier1_times = Vector{Float64}(undef, n1)
 for i in 1:n1
-    xbk = sum(tier1_X[i, j] * TRUE.beta_k[j] for j in 1:p_k)
-    xb  = sum(tier1_X[i, j] * TRUE.beta[j]   for j in 1:p)
-    ce  = TRUE.mu_country[tier1_country_ids[i]]
-    log_k_i = TRUE.mu_k + xbk + ce * 0.1 + TRUE.omega_k * true_z_k1[i]
-    log_eff_scale = TRUE.log_scale - (xb + ce + TRUE.gamma_k * log_k_i) / shape_true
+    xbk = sum(tier1_X[i, j] * TRUE.beta_k[j] for j in 1:p)
+    xbs = sum(tier1_X[i, j] * TRUE.beta_s[j] for j in 1:p)
+    ce_k = TRUE.mu_country_k[tier1_country_ids[i]]
+    ce_s = TRUE.mu_country_s[tier1_country_ids[i]]
+    log_k_i = TRUE.mu_k + xbk + ce_k
+    log_eff_scale = TRUE.log_scale - (xbs + ce_s + TRUE.gamma_k * log_k_i) / shape_true
     tier1_times[i] = rand(Weibull(shape_true, exp(log_eff_scale)))
 end
 cens_times_1 = rand(Exponential(median(tier1_times) * 1.5), n1)
@@ -224,7 +227,7 @@ println("  MRC obs: $total_mrc_obs")
 # ─────────────────────────────────────────────────────────────────────────────
 
 d = JointALM_DataSet(
-    n1=n1, n2=n2, p=p, p_k=p_k, n_countries=n_countries, MRC_MAX=MRC_MAX,
+    n1=n1, n2=n2, p=p, n_countries=n_countries, MRC_MAX=MRC_MAX,
     tier1_times=tier1_times, tier1_X=tier1_X,
     tier1_country_ids=tier1_country_ids,
     tier1_obs_idx=tier1_obs_idx, tier1_cens_idx=tier1_cens_idx,
@@ -273,19 +276,21 @@ function post_summary_vec(name, accessor, truth_vec)
 end
 
 results = []
-push!(results, post_summary("log_shape",     s -> s.log_shape,     TRUE.log_shape))
-push!(results, post_summary("log_scale",     s -> s.log_scale,     TRUE.log_scale))
-append!(results, post_summary_vec("beta",     s -> s.beta,          TRUE.beta))
-append!(results, post_summary_vec("beta_k",   s -> s.beta_k,        TRUE.beta_k))
-push!(results, post_summary("sigma_country", s -> s.sigma_country, TRUE.sigma_country))
-append!(results, post_summary_vec("mu_country", s -> s.mu_country,  TRUE.mu_country))
-push!(results, post_summary("mu_k",          s -> s.mu_k,          TRUE.mu_k))
-push!(results, post_summary("omega_k",       s -> s.omega_k,       TRUE.omega_k))
-push!(results, post_summary("gamma_k",       s -> s.gamma_k,       TRUE.gamma_k))
-push!(results, post_summary("gamma_hill",    s -> s.gamma_hill,    TRUE.gamma_hill))
-push!(results, post_summary("EC50",          s -> s.EC50,          TRUE.EC50))
-push!(results, post_summary("log_phi",       s -> s.log_phi,       TRUE.log_phi))
-push!(results, post_summary("P0",            s -> s.P0,            TRUE.P0))
+push!(results, post_summary("log_shape",       s -> s.log_shape,       TRUE.log_shape))
+push!(results, post_summary("log_scale",       s -> s.log_scale,       TRUE.log_scale))
+append!(results, post_summary_vec("beta_s",    s -> s.beta_s,          TRUE.beta_s))
+append!(results, post_summary_vec("beta_k",    s -> s.beta_k,          TRUE.beta_k))
+push!(results, post_summary("sigma_country_k", s -> s.sigma_country_k, TRUE.sigma_country_k))
+push!(results, post_summary("sigma_country_s", s -> s.sigma_country_s, TRUE.sigma_country_s))
+append!(results, post_summary_vec("mu_country_k", s -> s.mu_country_k, TRUE.mu_country_k))
+append!(results, post_summary_vec("mu_country_s", s -> s.mu_country_s, TRUE.mu_country_s))
+push!(results, post_summary("mu_k",            s -> s.mu_k,            TRUE.mu_k))
+push!(results, post_summary("omega_k",         s -> s.omega_k,         TRUE.omega_k))
+push!(results, post_summary("gamma_k",         s -> s.gamma_k,         TRUE.gamma_k))
+push!(results, post_summary("gamma_hill",      s -> s.gamma_hill,      TRUE.gamma_hill))
+push!(results, post_summary("EC50",            s -> s.EC50,            TRUE.EC50))
+push!(results, post_summary("log_phi",         s -> s.log_phi,         TRUE.log_phi))
+push!(results, post_summary("P0",              s -> s.P0,              TRUE.P0))
 
 println("=" ^ 82)
 println(rpad("Parameter", 18), rpad("Truth", 10), rpad("Mean", 10),
