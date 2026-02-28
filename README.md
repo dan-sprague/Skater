@@ -69,9 +69,9 @@ The hope of this project is that by letting Enzyme LLVM autodifferentiation shin
 
 Indeed, bayesian inference is an area where the Julia language should shine. HMC is intensive, CPU bound numerical computations of complex gradients and at its heart a physics simulation of a particle flying around phase-space. I built this package because I became increasingly upset that I always found myself returning to Stan.
 
-## Example: Complex, high N Survival Model
+## Example: Complex, high N, 177 Dimensional Model Survival Model 
 
-Below is a complex joint survival model for tiered data in a genetic disease. Clearly, complex (plate diagram available in this repo for the moment). Remarkably, on 3,000 datapoints PhaseSkate is able to sample 1,000 posterior draws in about **2 minutes**. In stan, the same model takes 10-20 minutes to sample (via StanSample.jl, which should just be a wrapper).
+Below is a complex joint survival model for tiered data in a genetic disease (model itself still a WIP). Clearly, complex (plate diagram available in this repo for the moment). Remarkably, on 3,000 datapoints PhaseSkate is able to sample 1,000 posterior draws in about **2 minutes**. In stan, the same model takes 10-20 minutes to sample (via StanSample.jl, which should just be a wrapper).
 
 1. The syntax should give Stan immediately. I like it! I think it provides structure and clarity.
 2. NO TILDES! I think, contrary to many mathematicians, people in the applied sciences and particularly programmers find this syntax very confusing. It *obscures the fact that really all that is happening is a summation to the log joint function*. I think people will be able to, with greater ease, write more performant code if the abstraction of the tilde removes this confusion.
